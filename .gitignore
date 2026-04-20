@@ -1,0 +1,26 @@
+# Dependencias
+node_modules
+
+# Variables de entorno con secretos reales — NUNCA al repositorio
+.env
+.env.local
+.env.*.local
+
+# .env.example NO está aquí: debe estar en git como referencia para el equipo
+
+# Artefactos de compilación
+dist
+
+# Cobertura de tests
+coverage
+
+# Cache de TypeScript incremental
+*.tsbuildinfo
+
+# Logs
+*.log
+npm-debug.log*
+
+# Sistema operativo
+.DS_Store
+Thumbs.db

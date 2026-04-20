@@ -1,0 +1,123 @@
+# Docker Compose V2 — el campo 'version' está obsoleto y se omite intencionalmente.
+# Uso:
+#   docker compose up -d            → levantar el stack completo
+#   docker compose up -d --build    → reconstruir imagen de la app
+#   docker compose logs -f app      → seguir logs de la aplicación
+#   docker compose down -v          → parar y borrar volúmenes (¡destruye datos!)
+
+services:
+
+  # ─── PostgreSQL ──────────────────────────────────────────────────────────────
+  postgres:
+    image: postgres:16-alpine
+    container_name: padel_postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER:     ${POSTGRES_USER:-padel}
+      # :? falla con error explícito si la variable no está definida en .env
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Configura POSTGRES_PASSWORD en el archivo .env}
+      POSTGRES_DB:       ${POSTGRES_DB:-padel_db}
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    ports:
+      # Exponer en localhost para acceso directo con psql/DBeaver (desarrollo)
+      # En producción se puede eliminar esta línea y dejar solo la red interna
+      - "127.0.0.1:5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-padel} -d ${POSTGRES_DB:-padel_db}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+    networks:
+      - padel_net
+
+
+  # ─── Redis ───────────────────────────────────────────────────────────────────
+  redis:
+    image: redis:7-alpine
+    container_name: padel_redis
+    restart: unless-stopped
+    # appendonly: activa AOF para persistencia (los datos sobreviven a reinicios)
+    # loglevel warning: reduce ruido en logs
+    command: ["redis-server", "--appendonly", "yes", "--loglevel", "warning"]
+    volumes:
+      - redisdata:/data
+    ports:
+      - "127.0.0.1:6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+      start_period: 10s
+    networks:
+      - padel_net
+
+
+  # ─── Aplicación NestJS ───────────────────────────────────────────────────────
+  app:
+    build:
+      context: .
+      target: production
+    container_name: padel_app
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    # env_file carga todas las variables de .env (JWT secrets, Stripe, Sentry…).
+    # Las entradas del bloque 'environment' tienen prioridad y sobreescriben las
+    # del fichero, lo que permite adaptar los hostnames al entorno Docker.
+    env_file: .env
+    environment:
+      NODE_ENV:    production
+      PORT:        "3000"
+      # Hostnames docker: usar nombres de servicio, no localhost
+      DATABASE_URL: "postgresql://${POSTGRES_USER:-padel}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-padel_db}?schema=public"
+      REDIS_HOST:   redis
+      REDIS_PORT:   "6379"
+    ports:
+      - "${PORT:-3000}:3000"
+    healthcheck:
+      # Comprobación HTTP pura con Node.js (disponible en la imagen sin instalar curl).
+      # Considera HEALTHY cualquier respuesta con status < 500 (incluye 404/401).
+      # Considera UNHEALTHY si el proceso Node no responde (status >= 500 o error).
+      test:
+        - "CMD"
+        - "node"
+        - "-e"
+        - >
+          require('http')
+            .get('http://localhost:3000', r => process.exit(r.statusCode >= 500 ? 1 : 0))
+            .on('error', () => process.exit(1))
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      # start_period cubre el tiempo de migrate deploy + arranque de NestJS
+      start_period: 60s
+    networks:
+      - padel_net
+
+
+# ─── Volúmenes persistentes ───────────────────────────────────────────────────
+volumes:
+  pgdata:
+    driver: local
+    # Para mapear a un directorio específico del host, descomentar:
+    # driver_opts:
+    #   type: none
+    #   o: bind
+    #   device: /ruta/absoluta/en/host/pgdata
+
+  redisdata:
+    driver: local
+
+
+# ─── Red interna del stack ────────────────────────────────────────────────────
+# Red bridge aislada: los servicios se comunican por nombre (postgres, redis, app)
+# y no son accesibles desde el exterior salvo por los puertos publicados arriba.
+networks:
+  padel_net:
+    driver: bridge

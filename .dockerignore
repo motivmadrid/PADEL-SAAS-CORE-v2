@@ -1,0 +1,54 @@
+# ─── Dependencias ────────────────────────────────────────────────────────────
+# Se reinstalan dentro del builder con npm ci
+node_modules
+
+# ─── Artefactos de compilación ───────────────────────────────────────────────
+# El builder genera los suyos propios
+dist
+*.tsbuildinfo
+
+# ─── Secretos y entorno ───────────────────────────────────────────────────────
+# NUNCA incluir en el contexto de build
+.env
+.env.local
+.env.*.local
+
+# ─── Control de versiones ─────────────────────────────────────────────────────
+.git
+.gitignore
+
+# ─── Tests y cobertura ────────────────────────────────────────────────────────
+test
+coverage
+**/*.spec.ts
+**/*.spec.js
+**/*.e2e-spec.ts
+
+# ─── Docker (evita recursión en el build context) ─────────────────────────────
+Dockerfile
+docker-compose.yml
+.dockerignore
+
+# ─── Scripts de desarrollo local ─────────────────────────────────────────────
+scripts
+
+# ─── Documentación ───────────────────────────────────────────────────────────
+README.md
+*.md
+
+# ─── Sistema operativo ────────────────────────────────────────────────────────
+.DS_Store
+Thumbs.db
+
+# ─── Logs ────────────────────────────────────────────────────────────────────
+*.log
+npm-debug.log*
+
+# ─── IDEs ────────────────────────────────────────────────────────────────────
+.vscode
+.idea
+*.swp
+*.swo
+
+# ─── PM2 (reemplazado por dumb-init en este Dockerfile) ──────────────────────
+ecosystem.config.js

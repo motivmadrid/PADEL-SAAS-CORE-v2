@@ -1,0 +1,182 @@
+// This is your Prisma schema file,
+// learn more about it in the docs: https://pris.ly/d/prisma-schema
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+enum Role {
+  USER
+  ADMIN
+}
+
+enum ReservationStatus {
+  PENDING    // Iniciado, bloqueado en Redis, esperando completar split payments o confirmar pago.
+  PAID       // Pagado por completo y reservado con éxito.
+  CANCELLED  // Cancelado por el usuario, admin o expiración del bloqueo (timeout).
+}
+
+enum PaymentStatus {
+  PENDING
+  COMPLETED
+  FAILED
+  REFUNDED
+}
+
+enum PaymentMethod {
+  WALLET
+  CREDIT_CARD
+  BANK_TRANSFER
+}
+
+enum TransactionType {
+  DEPOSIT   // Recarga de fondos en la wallet.
+  WITHDRAW  // Consumo de fondos de la wallet (ej. pagar reserva o split payment).
+  REFUND    // Devolución de fondos a la wallet.
+}
+
+enum CourtType {
+  INDOOR
+  OUTDOOR
+  COVERED
+}
+
+model User {
+  id        String   @id @default(uuid())
+  email     String   @unique
+  password  String
+  firstName String
+  lastName  String
+  role      Role     @default(USER)
+
+  // Balance del monedero virtual en CENTAVOS (para evitar bugs de precisión de coma flotante)
+  walletBalance Int @default(0)
+
+  // PHASE 6: Password Recovery
+  resetToken        String?   @unique // Token guardado de forma hash-eada
+  resetTokenExpires DateTime?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  reservations       Reservation[]
+  splitPayments      ReservationPayment[]
+  walletTransactions WalletTransaction[]
+  waitlistEntries    Waitlist[]
+}
+
+model Court {
+  id          String    @id @default(uuid())
+  name        String
+  description String?
+  type        CourtType // enum: INDOOR | OUTDOOR | COVERED
+  capacity    Int       @default(4)
+  isActive    Boolean   @default(true)
+  pricePerHour Int      // Precio base por hora en CENTAVOS
+
+  // PHASE 6: Pricing Engine Multipliers
+  peakPriceMultiplier    Float @default(1.0)
+  offPeakPriceMultiplier Float @default(1.0)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  reservations Reservation[]
+  waitlists    Waitlist[]
+}
+
+model Reservation {
+  id      String @id @default(uuid())
+  courtId String
+  userId  String // El 'Owner' o creador de la reserva
+
+  // Fechas y horas absolutas (UTC) para evitar problemas de Timezones
+  startTime DateTime
+  endTime   DateTime
+
+  isPublic Boolean @default(false) // Diferencia partidos privados de abiertos
+
+  // PHASE 6: Series recurrentes
+  recurringGroupId String?
+
+  status     ReservationStatus @default(PENDING)
+  totalPrice Int               // Precio total fijo al momento de reservar en CENTAVOS
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  court Court @relation(fields: [courtId], references: [id], onDelete: Restrict)
+  user  User  @relation(fields: [userId], references: [id], onDelete: Restrict)
+
+  // Relación con los múltiples pagos que conforman esta reserva
+  payments ReservationPayment[]
+
+  @@index([courtId, startTime, endTime]) // disponibilidad de pista
+  @@index([userId, status])              // reservas activas de un usuario
+  @@index([status])                      // jobs de limpieza de PENDING expirados
+  @@index([recurringGroupId])            // gestión de series recurrentes
+}
+
+// Modelo de Split Payments: permite que varios usuarios contribuyan económicamente a una Reserva
+model ReservationPayment {
+  id            String        @id @default(uuid())
+  reservationId String
+  userId        String        // El usuario específico que asume esta parte del pago
+
+  amount        Int           // Cantidad pagada o pendiente por este usuario en CENTAVOS
+  status        PaymentStatus @default(PENDING)
+
+  providerId    String?       @unique // Stripe PaymentIntent ID — único para idempotencia de webhooks
+  paymentMethod PaymentMethod?        // enum tipado en lugar de String libre
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  reservation Reservation @relation(fields: [reservationId], references: [id], onDelete: Cascade)
+  user        User        @relation(fields: [userId], references: [id], onDelete: Restrict)
+
+  @@index([reservationId]) // carga de pagos de una reserva
+  @@index([userId])        // pagos de un usuario
+}
+
+// Modelo de Monedero Virtual (Sistema de Créditos con transacciones ACID/Ledger)
+model WalletTransaction {
+  id     String @id @default(uuid())
+  userId String
+
+  amount      Int             // Cantidad en CENTAVOS (positivo para DEPOSIT/REFUND, negativo para WITHDRAW)
+  type        TransactionType
+  description String?         // Ej. "Recarga Stripe", "Pago de Pista 3", "Devolución por lluvia"
+
+  referenceId String? // Polimórfico (Opcional): ej. reservationId o el stripeChargeId
+
+  createdAt DateTime @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Restrict)
+
+  @@index([userId, createdAt]) // historial de wallet paginado por fecha
+}
+
+// Lista de espera para usuarios cuando una pista está llena
+model Waitlist {
+  id      String @id @default(uuid())
+  userId  String
+  courtId String
+
+  // Tramo horario al cual el usuario se ha suscrito para alertas
+  startTime DateTime
+  endTime   DateTime
+
+  createdAt DateTime @default(now())
+
+  user  User  @relation(fields: [userId], references: [id], onDelete: Cascade)
+  court Court @relation(fields: [courtId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, courtId, startTime, endTime]) // evita entradas duplicadas en waitlist
+  @@index([courtId, startTime, endTime])          // búsqueda de waitlist por pista y tramo
+}
