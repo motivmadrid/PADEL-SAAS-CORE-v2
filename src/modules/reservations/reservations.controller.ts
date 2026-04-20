@@ -4,15 +4,32 @@ import { CreateReservationDto } from './dto/create-reservation.dto';
 import { JwtAuthGuard } from '../../core/guards/jwt-auth.guard';
 import { RolesGuard } from '../../core/guards/roles.guard';
 import { Roles } from '../../core/decorators/roles.decorator';
+import { PrismaService } from '../../prisma/prisma.service';
 
-@Controller('reservations') // Changed to /reservations instead of /courts to match the new endpoints logically and support previous roots by creating standard paths
+@Controller('courts')
+export class CourtsController {
+  constructor(private readonly prisma: PrismaService) {}
+
+  @Get()
+  async getCourts() {
+    return this.prisma.court.findMany({
+      where: { isActive: true },
+      orderBy: { name: 'asc' },
+    });
+  }
+}
+
+@Controller('reservations')
 export class ReservationsController {
-  constructor(private readonly reservationsService: ReservationsService) {}
+  constructor(
+    private readonly reservationsService: ReservationsService,
+    private readonly prisma: PrismaService,
+  ) {}
 
   @Get(':id/availability')
   async getAvailability(@Param('id') id: string, @Query('date') date: string) {
     if (!date) {
-      date = new Date().toISOString().split('T')[0]; // Default to today
+      date = new Date().toISOString().split('T')[0];
     }
     return this.reservationsService.getAvailability(id, date);
   }
@@ -20,13 +37,10 @@ export class ReservationsController {
   @UseGuards(JwtAuthGuard)
   @Post(':id/reserve')
   async reserve(@Param('id') courtId: string, @Body() dto: CreateReservationDto, @Request() req) {
-    // Inject courtId from route param
     dto.courtId = courtId;
     return this.reservationsService.initiateReservation(req.user.id, dto);
   }
 
-  // == PHASE 6: Admin Endpoints ==
-  
   @UseGuards(JwtAuthGuard, RolesGuard)
   @Roles('ADMIN')
   @Post('cancel-weather')
